@@ -1,7 +1,39 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
-    "configurations": []
-}
+    "configurations": [
+      {
+        "name": "GDB: Launch",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/witsshell.c",  // Replace with your executable name
+        "args": [],  // Add any command line arguments for your shell here
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": true,  // Set this to false if you don't want to use an external console
+        "MIMode": "gdb",
+        "setupCommands": [
+          {
+            "description": "Enable pretty-printing for gdb",
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ],
+        "miDebuggerPath": "/usr/bin/gdb",
+        "preLaunchTask": "build",  // Add a preLaunchTask to build your program before debugging
+        "setupCommands": [
+          {
+            "description": "Enable pretty-printing for gdb",
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ],
+        "logging": {
+          "engineLogging": true,
+          "trace": true,
+          "traceResponse": true
+        }
+      }
+    ]
+  }
+  
