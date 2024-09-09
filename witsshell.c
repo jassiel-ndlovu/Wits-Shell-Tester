@@ -13,11 +13,19 @@
 
 int main() {
 	char EXIT_KEY[] = "exit\n";
-	char CD_KEY[] = "cd\n";
+	char CD_KEY[] = "cd";
 	char PATH_KEY[] = "path\n";
+	char _PATH_KEY[] = "path";
 	char ERROR_MESSAGE[30] = "An error has occurred\n";
+
 	char BIN[100] = "/bin/";
 	char USR_BIN[100] = "/usr/bin/";
+
+	char* bin = "/bin/";
+	char* usr = "/usr/bin/";
+
+	Node* path_list = create_node(bin);
+	path_list->next = create_node(usr);
 
 	char* cmd = NULL;
 
@@ -64,24 +72,38 @@ int main() {
 
 		// cd
 		if (strcmp(head->data, CD_KEY) == 0) {
-			pid_t pid = fork();
-
-			if (pid < 0) {
-				// That is, if the fork failed
-				perror("fork");
-				exit(EXIT_FAILURE);
-			} else if (pid == 0) {
-				// Child process
-
-				if (head->next == NULL || head->next->next == NULL) {
-					write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
-					exit(EXIT_FAILURE);
-				}
-
+			if (head->next == NULL || head->next->next != NULL) {
+				write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
 			} else {
-				// Parent process
+				pid_t pid = fork();
 
-				wait(NULL);
+				if (pid < 0) {
+					// That is, if the fork failed
+					
+					perror("fork");
+					exit(EXIT_FAILURE);
+				} else if (pid == 0) {
+					// Child process
+
+					size_t len = strcspn(head->next->data, "\n");
+
+					char* next_cpy = (char*) malloc(len + 1); 
+
+					strncpy(next_cpy, head->next->data, len);
+
+					if (chdir(next_cpy) != 0) {
+						write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+						free(next_cpy);
+						exit(EXIT_FAILURE);
+					}
+					
+					free(next_cpy);
+					exit(EXIT_SUCCESS);
+				} else {
+					// Parent process
+
+					wait(NULL);
+				}
 			}
 		}
 		
@@ -95,8 +117,53 @@ int main() {
 		}
 
 		// path
-		else if (strcmp(head->data, PATH_KEY) == 0) {
+		else if (strcmp(head->data, PATH_KEY) == 0 || strcmp(head->data, _PATH_KEY) == 0) {
+			// Free list if path command has not args
+			if (!head->next) {
+				free_list(path_list);
+				path_list = NULL;
+			} 
+			else {
+				// head list
+				Node* curr_head = head->next;
 
+				while (curr_head) {
+					// Extract and format curr_head->data
+					size_t len = strcspn(curr_head->data, "\n");
+					char* next_data = (char*) malloc(len + 1);
+					strncpy(next_data, curr_head->data, len);
+
+					// Check path's existence
+					if (access(next_data, F_OK) == -1) {
+						write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+						free(next_data);
+						continue;
+					}
+
+					// Search for path in path_list that matches next_data
+					Node* curr = path_list;
+					bool found = false;
+
+					while (curr) {
+						// Comparison
+						if (strcmp(curr->data, next_data) == 0) {
+							found = true;
+							break;
+						}
+
+						curr = curr->next;
+					}
+
+					// Add the data if not found
+					if (found == false) 
+						push_back(&path_list, next_data);
+					
+					// Free memory
+					free(next_data);
+
+					curr_head = curr_head->next;
+				}
+			}
 		}
 
 		// non-built-in commands
@@ -110,13 +177,15 @@ int main() {
 				exit(EXIT_FAILURE);
 			} else if (pid == 0) {
 				// Child process
+				Node* curr = path_list;
 
+				while (curr) {
+
+				}
 				// Extract the program name to be run
-				char* head_cpy;
-
 				size_t len = strcspn(head->data, "\n");
 
-				head_cpy = (char*) malloc(len + 1);
+				char* head_cpy = (char*) malloc(len + 1);
 
 				strncpy(head_cpy, head->data, len);
 
@@ -198,6 +267,8 @@ int main() {
 		free_list(head);
 		free(command);
 		free(command_cpy);
+
+		head = NULL;
 	}
 
 	free(cmd);
