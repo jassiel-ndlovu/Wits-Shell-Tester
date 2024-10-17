@@ -6,105 +6,187 @@
 #include <string.h>
 #include <assert.h>
 #include <fcntl.h>
+#include <ctype.h>
 
 #include "linked_list.h"
 
-// int MainArgc, char *MainArgv[]
 char EXIT_KEY[] = "exit";
 char CD_KEY[] = "cd";
-char PATH_KEY[] = "path\n";
-char _PATH_KEY[] = "path";
+char PATH_KEY[] = "path";
 char ERROR_MESSAGE[30] = "An error has occurred\n";
 char REDIRECT_SYMB[] = ">";
 
 char* bin = "/bin/";
 char* usr = "/usr/bin/";
 
-int main() {
-	Node* path_list = create_node(bin);
-	path_list->next = create_node(usr);
+Node* path_list;
 
-	char* cmd = NULL;
+int main(int MainArgc, char *MainArgv[]) {
+    path_list = create_node(bin);
+    path_list->next = create_node(usr);
 
-	while (1) {
-		////////////////////// SHELL HEADER SECTION //////////////////////
+    char* cmd = NULL;
+    FILE* input_stream = stdin;
 
-		printf("witsshell> ");
+    // Batch mode
+    if (MainArgc == 2) {
+        input_stream = fopen(MainArgv[1], "r");
 
-		////////////////////// SHELL PROCESSING //////////////////////
-		size_t cmd_size = 0;
-		size_t cmd_chars_size;
+        if (input_stream == NULL) {
+            write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+            exit(EXIT_FAILURE);
+        }
+    } else if (MainArgc > 2) {
+        write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+        exit(EXIT_FAILURE);
+    }
 
-		cmd_chars_size = getline(&cmd, &cmd_size, stdin);
+    while (1) {
+        ////////////////////// SHELL HEADER SECTION //////////////////////
+        if (input_stream == stdin)
+            printf("witsshell> ");
 
-		// CTRL + D
-		if (feof(stdin)) {
-			printf("\n");
-			free(cmd);
-			exit(0);
-		}
+        ////////////////////// SHELL PROCESSING //////////////////////
+        size_t cmd_size = 0;
+        int cmd_chars_size;
 
-		if (cmd_chars_size == -1) {
-			perror("getline");
-			free(cmd);
-			continue;
-		}
+        // EOF Marker for batch mode
+        if (input_stream != stdin && feof(input_stream)) {
+            fclose(input_stream);
+            printf("\n");
+            free(cmd);
+            exit(0);
+        }
 
-		// Parallel compute
-		char* token;
-		pid_t pids[32];
-		int num_pids = 0;
+        cmd_chars_size = getline(&cmd, &cmd_size, input_stream);
 
-		while ((token = strsep(&cmd, "&")) != NULL) {
-			// Skip empty commands
-			trim(token);
+        // CTRL + D
+        if (input_stream == stdin && feof(input_stream)) {
+            printf("\n");
+            free(cmd);
+            exit(0);
+        }
 
-			if (strlen(token) == 0) continue;
+		// EOF
+        if (cmd_chars_size == -1) {
+            break;
+        }
 
-			// Handle built-ins (exit and cd)
-			size_t len = strcspn(token, "\n");
-			char* command = strndup(token, len);
+        // Parallel compute
+        char* token;
+        pid_t pids[32];
+        int num_pids = 0;
 
-			trim(command);
+        while ((token = strsep(&cmd, "&")) != NULL) {
+            // Skip empty commands
+            trim(token);
 
-			// exit command
-			if (strcmp(command, EXIT_KEY) == 0) {
-				free(cmd);
-				exit(0);
-			} else if (strncmp(command, CD_KEY, strlen(CD_KEY)) == 0) {
-				char* dir = command + strlen(CD_KEY) + 1;
+            if (strlen(token) == 0) continue;
 
-				cd_command(dir);
+            // Handle built-ins (exit and cd)
+            size_t len = strcspn(token, "\n");
+            char* command = strndup(token, len);
 
-				free(command);
-				continue;
-			}
+            trim(command);
 
-			// Parallel compute for non-built-in commands and path
-			pids[num_pids] = fork();
+            // exit command
+            if (strcmp(command, EXIT_KEY) == 0) {
+                free(cmd);
+                free(command);
+                free_list(path_list);
+                exit(0);
+            } else if (strncmp(command, CD_KEY, strlen(CD_KEY)) == 0) {
+                char* dir = command + strlen(CD_KEY) + 1;
+                cd_command(dir);
+                free(command);
+                continue;
+            }
 
-			if (pids[num_pids] < 0) {
-				perror("fork");
-				free(command);
-				exit(EXIT_FAILURE);
-			} else if (pids[num_pids] == 0) {
-				process_command(command, path_list);
-				free(command);
-				exit(EXIT_SUCCESS);
-			}
+            // path command
+            else if (strncmp(command, PATH_KEY, strlen(PATH_KEY)) == 0) {
+                if (path_command(command) != 0) {
+                    write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+                }
 
-			num_pids++;
-			free(command);
-		}
+                free(command);
+                continue;
+            }
 
-		for (int i = 0; i < num_pids; i++)
-			waitpid(pids[i], NULL, 0);
-	}
+            // Parallel compute for non-built-in commands
+            pids[num_pids] = fork();
 
-	free(cmd);
-	free_list(path_list);
+            if (pids[num_pids] < 0) {
+                perror("fork");
+                free(command);
+                free(cmd);
+                exit(EXIT_FAILURE);
+            } else if (pids[num_pids] == 0) {
+				int error = process_command(command);
 
-	return(0);
+                if (error == -1) {
+                    free(command);
+                    exit(EXIT_FAILURE);
+                }
+
+                free(command);
+                exit(EXIT_SUCCESS);
+            }
+
+            num_pids++;
+            free(command);
+        }
+
+        free(cmd);
+
+        for (int i = 0; i < num_pids; i++) {
+            if (waitpid(pids[i], NULL, 0) < 0) {
+                perror("waitpid");
+            }
+        }
+    }
+
+    if (MainArgc == 2)
+        fclose(input_stream);
+
+    free_list(path_list);
+
+    return(0);
+}
+
+Node* handle_embedded_redirect(Node* head, const char* command) {
+    char* cmd_copy = strdup(command);
+    char* token = strtok(cmd_copy, " ");
+    char* redirect_token = NULL;
+
+    // Search for REDIRECT_SYMB
+    while (token != NULL) {
+        if (strchr(token, '>') != NULL) {
+            redirect_token = token;
+            break;
+        }
+
+        token = strtok(NULL, " ");
+    }
+
+    // We want to add parts before and after REDIRECT_SYMB separately from REDIRECT_SYMB
+    if (redirect_token != NULL) {
+        char* before_redirect = strtok(redirect_token, ">");
+        char* after_redirect = strtok(NULL, ">");
+        
+        if (before_redirect != NULL) {
+            push_back(&head, before_redirect);
+        }
+
+		push_back(&head, REDIRECT_SYMB);
+
+        if (after_redirect != NULL) {
+            push_back(&head, after_redirect);
+        }
+    }
+
+    free(cmd_copy);
+
+    return head;
 }
 
 void trim(char* str) {
@@ -150,10 +232,10 @@ void cd_command(char* dir) {
 	free(next_cpy);
 }
 
-void process_command(char* _cmd, Node* path_list) {
+int path_command(char* _cmd) {
 	if (strlen(_cmd) <= 0) {
 		perror("getline");
-		return;
+		return -1;
 	}
 
 	char* token;
@@ -166,10 +248,8 @@ void process_command(char* _cmd, Node* path_list) {
 		push_back(&head, token);
 	}
 
-	// ////////////////////// SHELL FORKING SECTION //////////////////////
-
 	// path
-	if (strcmp(head->data, PATH_KEY) == 0 || strcmp(head->data, _PATH_KEY) == 0) {
+	if (strcmp(head->data, PATH_KEY) == 0) {
 		// Free list if path command has not args
 		if (!head->next) {
 			free_list(path_list);
@@ -189,6 +269,7 @@ void process_command(char* _cmd, Node* path_list) {
 				if (access(next_data, F_OK) == -1) {
 					write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
 					free(next_data);
+                    curr_head = curr_head->next;
 					continue;
 				}
 
@@ -206,10 +287,12 @@ void process_command(char* _cmd, Node* path_list) {
 					curr = curr->next;
 				}
 
-				// Add the data if not found
-				if (found == false) 
-					push_back(&path_list, next_data);
-				
+				// Overwrite and add the data if not found
+				if (found == false) {
+					free_list(path_list);
+                    path_list = create_node(next_data);
+				}
+
 				// Free memory
 				free(next_data);
 
@@ -218,145 +301,123 @@ void process_command(char* _cmd, Node* path_list) {
 		}
 	}
 
-	// non-built-in commands
-	else {
-		pid_t pid = fork();
+	return 0;
+}
 
-		if (pid < 0) {
-			// That is, if the fork failed
+int process_command(char* _cmd) {
+    if (strlen(_cmd) <= 0) {
+        perror("getline");
+        return -1;
+    }
 
-			perror("fork");
-			exit(EXIT_FAILURE);
-		} else if (pid == 0) {
-			// Child process
+    char* command = strdup(_cmd);
+    char* token;
 
-			// Extract the program name to be run
-			size_t len = strcspn(head->data, "\n");
+    // Linked list for commands
+    Node* head = NULL;
+    while ((token = strsep(&command, " ")) != NULL) {
+		if (strstr(token, REDIRECT_SYMB) != NULL)
+			head = handle_embedded_redirect(head, token);
+		else	
+        	push_back(&head, token);
+    }
 
-			char* head_cpy = strndup(head->data, len);
+    // Extract the program name to be run
+    size_t len = strcspn(head->data, "\n");
+    char* head_cpy = strndup(head->data, len);
 
-			// Search path_list for viable path
-			Node* curr_path = path_list;
+    // Search path_list for a viable path
+    Node* curr_path = path_list;
+    char* path = NULL;
 
-			char* path = NULL;
+    while (curr_path) {
+        path = malloc(strlen(curr_path->data) + strlen(head_cpy) + 1);
+        strcpy(path, curr_path->data);
+        strcat(path, head_cpy);
 
-			while (curr_path) {
-				path = malloc(strlen(curr_path->data) + strlen(head_cpy) + 1);
+        if (access(path, F_OK) == 0) break;
 
-				strcpy(path, curr_path->data);
-				strcat(path, head_cpy);
+        free(path);
+        path = NULL;
+        curr_path = curr_path->next;
+    }
 
-				if (access(path, F_OK) == 0) break;
+    // If no viable path is found, return an error
+    if (!path || curr_path == NULL) {
+        write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+        free(head_cpy);
+        free_list(head);
+        free(command);
+        return -1;
+    }
 
-				free(path);
-				path = NULL;
-				curr_path = curr_path->next;
-			}
+    // Count the number of arguments for the command
+    int n = 0;
+    Node* curr = head;
+    while (curr && strcmp(curr->data, REDIRECT_SYMB) != 0) {
+        curr = curr->next;
+        n++;
+    }
 
-			// If no viable path is found, return an error and exit fork
-			// Otherwise, the viable path is now in curr->data
-			if (!path) {
-				write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
-				free(head_cpy);
-				exit(EXIT_FAILURE);
-			}
+    // Create an array to hold arguments
+    char* args[n + 1];
+    curr = head;
 
-			// Get the number of arguments to be passed to head program
-			int n = 0;
+    for (int i = 0; i < n; i++) {
+        len = strcspn(curr->data, "\n");
+        args[i] = strndup(curr->data, len);
+        curr = curr->next;
+    }
 
-			Node* curr = head;
+    args[n] = NULL;
 
-			while (curr && strcmp(curr->data, REDIRECT_SYMB) != 0) {
-				curr = curr->next;
-				n++;
-			}
+    // Handle redirection if necessary
+    if (curr && strcmp(curr->data, REDIRECT_SYMB) == 0) {
+        if (curr->next == NULL || curr->next->next != 	NULL) {
+            write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
+            clean(path, head_cpy, args, n);
+            return -1;
+        }
 
-			// Declare the array of size n to hold arguments
-			char* args[n + 1];
+        len = strcspn(curr->next->data, "\n");
+        char* file_name = strndup(curr->next->data, len);
 
-			curr = head;
+        int fd = open(file_name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		
+        if (fd < 0) {
+            perror("open");
+            free(file_name);
+            clean(path, head_cpy, args, n);
+            return -1;
+        }
 
-			for (int i = 0; i < n; i++) {
-				len = strcspn(curr->data, "\n"); 
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            perror("dup2");
+            free(file_name);
+            clean(path, head_cpy, args, n);
+            return -1;
+        }
 
-				args[i] = strndup(curr->data, len);
+        close(fd);
+        free(file_name);
+    }
 
-				curr = curr->next;
-			}
+    // Execute the program
+    // args[0] = "/home/jassielndlovu/CS3/OS/WitsShell-Project/Wits-Shell-Tester/tests";
+    
+    execv(path, args);
 
-			args[n] = NULL;
+    // If execv fails
+    perror("execv");
+    clean(path, head_cpy, args, n);
 
-			// Check for redirection
-			if (curr && strcmp(curr->data, REDIRECT_SYMB) == 0) {
-				// Handle errors: missing file name
-				if (curr->next == NULL) {
-					write(STDERR_FILENO, ERROR_MESSAGE, strlen(ERROR_MESSAGE));
-					free(head_cpy);
-					free(path);
-					for (int i = 0; i < n; i++) free(args[i]);
-					exit(EXIT_FAILURE);
-				}
+    return 0;
+}
 
-				// Extract and format the file name
-				len = strcspn(curr->next->data, "\n");
-				char* file_name = strndup(curr->next->data, len);
-
-				// File output
-				int fd = open(file_name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-				if (fd < 0) {
-					perror("open");
-					free(file_name);
-					free(head_cpy);
-					free(path);
-					for (int i = 0; i < n; i++) free(args[i]);
-					exit(EXIT_FAILURE);
-				}
-
-				if (dup2(fd, STDOUT_FILENO) < 0) {
-					perror("dup2");
-					free(file_name);
-					free(head_cpy);
-					free(path);
-					for (int i = 0; i < n; i++) free(args[i]);
-					exit(EXIT_FAILURE);
-				}
-
-				close(fd);
-				free(file_name);
-			}
-
-			// Run the non-built-in program
-			execv(path, args);
-
-			perror("execv");
-
-			// Free memory
-			free(path);
-			free(head_cpy);
-
-			for (int i = 0; i < n; i++) {
-				free(args[i]);
-			}
-
-			exit(EXIT_SUCCESS);
-		} else {
-			// Parent process
-			int  saved_stdout = dup(STDOUT_FILENO);
-
-			wait(NULL);
-
-			// Restore stdout to the terminal
-			dup2(saved_stdout, STDOUT_FILENO);
-
-			close(saved_stdout);
-		}
-	}
-
-	// ////////////////////// SHELL TERMINATION //////////////////////
-
-	free_list(head);
-	free(command);
-
-	head = NULL;
+void clean(char* path, char* head_cpy, char* args[], int n) {
+    free(path);
+    free(head_cpy);
+    for (int i = 0; i < n; i++) {
+        free(args[i]);
+    }
 }
