@@ -126,7 +126,7 @@ int main(int MainArgc, char *MainArgv[]) {
                 if (error == -1) {
                     free(command);
                     exit(EXIT_FAILURE);
-                }
+                }   
 
                 free(command);
                 exit(EXIT_SUCCESS);
@@ -256,6 +256,10 @@ int path_command(char* _cmd) {
 			path_list = NULL;
 		} 
 		else {
+            // Overwrite first
+            free_list(path_list);
+            path_list = NULL;
+
 			// head list
 			Node* curr_head = head->next;
 
@@ -263,7 +267,13 @@ int path_command(char* _cmd) {
 				// Extract and format curr_head->data
 				size_t len = strcspn(curr_head->data, "\n");
 				char* next_data = (char*) malloc(len + 1);
-				strncpy(next_data, curr_head->data, len);
+
+                if (curr_head->data[len - 1] != '\n')
+				    strcpy(next_data, curr_head->data);
+                else {
+                    strncpy(next_data, curr_head->data, len);
+                    next_data[len] = '\0';
+                }
 
 				// Check path's existence
 				if (access(next_data, F_OK) == -1) {
@@ -272,6 +282,13 @@ int path_command(char* _cmd) {
                     curr_head = curr_head->next;
 					continue;
 				}
+
+                // Process the string
+                trim(next_data);
+
+                // Concatenate next_data with forward slash
+                if (next_data[strlen(next_data) - 1] != "/")
+                    strcat(next_data, "/");
 
 				// Search for path in path_list that matches next_data
 				Node* curr = path_list;
@@ -287,10 +304,12 @@ int path_command(char* _cmd) {
 					curr = curr->next;
 				}
 
-				// Overwrite and add the data if not found
+				// Add the data if not found
 				if (found == false) {
-					free_list(path_list);
-                    path_list = create_node(next_data);
+                    if (path_list == NULL) 
+                        path_list = create_node(next_data);
+                    else
+                        push_back(&path_list, next_data);
 				}
 
 				// Free memory
@@ -335,9 +354,12 @@ int process_command(char* _cmd) {
         strcpy(path, curr_path->data);
         strcat(path, head_cpy);
 
-        if (access(path, F_OK) == 0) break;
+        if (access(path, F_OK) == 0) {
+            break;
+        }
 
         free(path);
+
         path = NULL;
         curr_path = curr_path->next;
     }
@@ -403,11 +425,9 @@ int process_command(char* _cmd) {
     }
 
     // Execute the program
-    // args[0] = "/home/jassielndlovu/CS3/OS/WitsShell-Project/Wits-Shell-Tester/tests";
-    
     execv(path, args);
 
-    // If execv fails
+    // // If execv fails
     perror("execv");
     clean(path, head_cpy, args, n);
 
